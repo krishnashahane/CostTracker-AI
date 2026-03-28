@@ -1,4 +1,4 @@
-# CostTracker AI
+# 💸 CostTracker AI
 
 Beautiful, privacy-first dashboard to track and optimize your AI API spending across all major providers.
 
