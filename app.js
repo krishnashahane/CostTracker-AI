@@ -408,7 +408,7 @@ function renderEntries() {
     deleteButton.type = 'button';
     deleteButton.title = 'Delete';
     deleteButton.setAttribute('aria-label', `Delete ${entry.model} entry`);
-    deleteButton.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 6h18M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2"/></svg>';
+    deleteButton.textContent = 'Delete';
     deleteButton.addEventListener('click', () => deleteEntry(entry.id));
     actionCell.appendChild(deleteButton);
     row.appendChild(actionCell);
