@@ -2,6 +2,12 @@
 const STORAGE_KEY = 'costtracker_entries';
 const BUDGET_KEY = 'costtracker_budget';
 const THEME_KEY = 'costtracker_theme';
+const MAX_ENTRIES = 5000;
+const MAX_PROVIDER_LENGTH = 64;
+const MAX_MODEL_LENGTH = 128;
+const MAX_NOTE_LENGTH = 500;
+const MAX_COST = 1_000_000_000;
+const MAX_TOKENS = 1_000_000_000_000;
 
 const PROVIDER_COLORS = {
   'OpenAI': '#10a37f',
@@ -14,22 +20,23 @@ const PROVIDER_COLORS = {
   'Other': '#6366f1'
 };
 
-let entries = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
-let budget = JSON.parse(localStorage.getItem(BUDGET_KEY) || 'null');
+let entries = loadEntries();
+let budget = loadBudget();
 let spendingChart = null;
 let providerChart = null;
 let currentRange = 7;
 
 // =================== INIT ===================
 document.addEventListener('DOMContentLoaded', () => {
-  const saved = localStorage.getItem(THEME_KEY);
-  if (saved) document.documentElement.setAttribute('data-theme', saved);
-  document.getElementById('entryDate').valueAsDate = new Date();
-
-  // Check if URL has #app hash
-  if (window.location.hash === '#app') {
-    showApp();
+  const savedTheme = localStorage.getItem(THEME_KEY);
+  if (savedTheme === 'dark' || savedTheme === 'light') {
+    document.documentElement.setAttribute('data-theme', savedTheme);
   }
+
+  const dateInput = document.getElementById('entryDate');
+  if (dateInput) dateInput.valueAsDate = new Date();
+
+  if (window.location.hash === '#app') showApp();
 });
 
 // =================== NAVIGATION ===================
@@ -51,17 +58,18 @@ function showLanding() {
 }
 
 function toggleMobileMenu() {
-  document.querySelector('.nav-links').classList.toggle('open');
+  document.querySelector('.nav-links')?.classList.toggle('open');
 }
 
 // =================== THEME ===================
 function toggleTheme() {
   const html = document.documentElement;
-  const current = html.getAttribute('data-theme');
-  const next = current === 'dark' ? 'light' : 'dark';
+  const next = html.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
   html.setAttribute('data-theme', next);
   localStorage.setItem(THEME_KEY, next);
-  if (spendingChart) updateCharts();
+  if (document.getElementById('app') && !document.getElementById('app').classList.contains('hidden')) {
+    updateCharts();
+  }
 }
 
 // =================== DASHBOARD ===================
@@ -77,105 +85,140 @@ function initDashboard() {
 
 function updateSummary() {
   const now = new Date();
-  const today = now.toISOString().split('T')[0];
-  const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().split('T')[0];
-  const weekAgo = new Date(now - 7 * 86400000).toISOString().split('T')[0];
-  const twoWeeksAgo = new Date(now - 14 * 86400000).toISOString().split('T')[0];
+  const today = localDateKey(now);
+  const monthStart = localDateKey(new Date(now.getFullYear(), now.getMonth(), 1));
+  const weekAgo = localDateKey(new Date(now.getTime() - 7 * 86400000));
+  const twoWeeksAgo = localDateKey(new Date(now.getTime() - 14 * 86400000));
 
-  const total = entries.reduce((s, e) => s + e.cost, 0);
+  const total = sum(entries, e => e.cost);
   const todayEntries = entries.filter(e => e.date === today);
-  const todayTotal = todayEntries.reduce((s, e) => s + e.cost, 0);
-  const monthTotal = entries.filter(e => e.date >= monthStart).reduce((s, e) => s + e.cost, 0);
-  const weekTotal = entries.filter(e => e.date >= weekAgo).reduce((s, e) => s + e.cost, 0);
-  const prevWeekTotal = entries.filter(e => e.date >= twoWeeksAgo && e.date < weekAgo).reduce((s, e) => s + e.cost, 0);
-
+  const todayTotal = sum(todayEntries, e => e.cost);
+  const monthTotal = sum(entries.filter(e => e.date >= monthStart), e => e.cost);
+  const weekTotal = sum(entries.filter(e => e.date >= weekAgo), e => e.cost);
+  const prevWeekTotal = sum(entries.filter(e => e.date >= twoWeeksAgo && e.date < weekAgo), e => e.cost);
   const providers = new Set(entries.map(e => e.provider));
 
-  document.getElementById('totalSpent').textContent = formatCurrency(total);
-  document.getElementById('todaySpent').textContent = formatCurrency(todayTotal);
-  document.getElementById('todayCalls').textContent = `${todayEntries.length} API call${todayEntries.length !== 1 ? 's' : ''}`;
-  document.getElementById('monthSpent').textContent = formatCurrency(monthTotal);
-  document.getElementById('providerCount').textContent = providers.size;
+  setText('totalSpent', formatCurrency(total));
+  setText('todaySpent', formatCurrency(todayTotal));
+  setText('todayCalls', `${todayEntries.length} API call${todayEntries.length !== 1 ? 's' : ''}`);
+  setText('monthSpent', formatCurrency(monthTotal));
+  setText('providerCount', String(providers.size));
 
-  const change = prevWeekTotal > 0 ? ((weekTotal - prevWeekTotal) / prevWeekTotal * 100).toFixed(0) : 0;
+  const change = prevWeekTotal > 0 ? ((weekTotal - prevWeekTotal) / prevWeekTotal * 100) : 0;
   const changeEl = document.getElementById('totalChange');
-  changeEl.textContent = `${change >= 0 ? '+' : ''}${change}% from last week`;
-  changeEl.className = `sc-change ${change >= 0 ? 'negative' : 'positive'}`;
+  if (changeEl) {
+    changeEl.textContent = `${change >= 0 ? '+' : ''}${change.toFixed(0)}% from last week`;
+    changeEl.className = `sc-change ${change >= 0 ? 'negative' : 'positive'}`;
+  }
 
-  if (budget) {
-    const pct = (monthTotal / budget * 100).toFixed(0);
-    document.getElementById('monthBudget').textContent = `${pct}% of $${budget} budget`;
+  const budgetLabel = document.getElementById('monthBudget');
+  const alert = document.getElementById('budgetAlert');
+  const alertText = document.getElementById('budgetAlertText');
 
+  if (budget > 0) {
+    const pct = monthTotal / budget * 100;
+    if (budgetLabel) budgetLabel.textContent = `${Math.round(pct)}% of ${formatCurrency(budget)} budget`;
     if (pct >= 80) {
-      const alert = document.getElementById('budgetAlert');
-      alert.classList.remove('hidden');
-      document.getElementById('budgetAlertText').textContent =
-        pct >= 100
+      alert?.classList.remove('hidden');
+      if (alertText) {
+        alertText.textContent = pct >= 100
           ? `Budget exceeded! You've spent ${formatCurrency(monthTotal)} of your ${formatCurrency(budget)} monthly budget.`
-          : `Warning: You've used ${pct}% of your ${formatCurrency(budget)} monthly budget.`;
+          : `Warning: You've used ${Math.round(pct)}% of your ${formatCurrency(budget)} monthly budget.`;
+      }
+    } else {
+      alert?.classList.add('hidden');
     }
   } else {
-    document.getElementById('monthBudget').textContent = 'No budget set';
+    if (budgetLabel) budgetLabel.textContent = 'No budget set';
+    alert?.classList.add('hidden');
   }
 }
 
 function updateProviders() {
-  const providerMap = {};
-  entries.forEach(e => {
-    if (!providerMap[e.provider]) providerMap[e.provider] = { total: 0, count: 0 };
-    providerMap[e.provider].total += e.cost;
-    providerMap[e.provider].count++;
-  });
-
   const list = document.getElementById('providerList');
-  const total = entries.reduce((s, e) => s + e.cost, 0);
+  const chart = document.getElementById('providerChart');
+  if (!list || !chart) return;
 
-  if (Object.keys(providerMap).length === 0) {
-    list.innerHTML = '<div class="empty-state"><p>No data yet. Add your first entry below.</p></div>';
-    document.getElementById('providerChart').classList.add('hidden');
+  const providerMap = new Map();
+  for (const entry of entries) {
+    const current = providerMap.get(entry.provider) || { total: 0, count: 0 };
+    current.total += entry.cost;
+    current.count += 1;
+    providerMap.set(entry.provider, current);
+  }
+
+  if (providerMap.size === 0) {
+    list.replaceChildren(createEmptyState('No data yet. Add your first entry below.'));
+    chart.classList.add('hidden');
     return;
   }
 
-  document.getElementById('providerChart').classList.remove('hidden');
+  chart.classList.remove('hidden');
+  const total = sum(entries, e => e.cost);
+  const sorted = [...providerMap.entries()].sort((a, b) => b[1].total - a[1].total);
+  list.replaceChildren();
 
-  const sorted = Object.entries(providerMap).sort((a, b) => b[1].total - a[1].total);
-  list.innerHTML = sorted.map(([name, data]) => {
-    const pct = total > 0 ? (data.total / total * 100).toFixed(1) : 0;
-    const color = PROVIDER_COLORS[name] || PROVIDER_COLORS['Other'];
-    return `
-      <div class="provider-item">
-        <div class="provider-color" style="background:${color}"></div>
-        <div class="provider-info">
-          <div class="provider-name">${name}</div>
-          <div class="provider-calls">${data.count} call${data.count !== 1 ? 's' : ''}</div>
-        </div>
-        <div>
-          <div class="provider-amount">${formatCurrency(data.total)}</div>
-          <div class="provider-pct">${pct}%</div>
-        </div>
-      </div>`;
-  }).join('');
+  for (const [name, data] of sorted) {
+    const color = PROVIDER_COLORS[name] || PROVIDER_COLORS.Other;
+    const pct = total > 0 ? (data.total / total * 100).toFixed(1) : '0.0';
+
+    const item = document.createElement('div');
+    item.className = 'provider-item';
+
+    const dot = document.createElement('div');
+    dot.className = 'provider-color';
+    dot.style.background = color;
+
+    const info = document.createElement('div');
+    info.className = 'provider-info';
+
+    const providerName = document.createElement('div');
+    providerName.className = 'provider-name';
+    providerName.textContent = name;
+
+    const calls = document.createElement('div');
+    calls.className = 'provider-calls';
+    calls.textContent = `${data.count} call${data.count !== 1 ? 's' : ''}`;
+
+    const amounts = document.createElement('div');
+    const amount = document.createElement('div');
+    amount.className = 'provider-amount';
+    amount.textContent = formatCurrency(data.total);
+
+    const percentage = document.createElement('div');
+    percentage.className = 'provider-pct';
+    percentage.textContent = `${pct}%`;
+
+    info.append(providerName, calls);
+    amounts.append(amount, percentage);
+    item.append(dot, info, amounts);
+    list.appendChild(item);
+  }
 }
 
 // =================== CHARTS ===================
 function initCharts() {
+  const canvas1 = document.getElementById('spendingChart');
+  const canvas2 = document.getElementById('providerChart');
+  if (!canvas1 || !canvas2) return;
+
+  if (typeof window.Chart !== 'function') {
+    const fallback = document.getElementById('spendingChartFallback');
+    fallback?.classList.remove('hidden');
+    return;
+  }
+
+  document.getElementById('spendingChartFallback')?.classList.add('hidden');
+
   const isDark = document.documentElement.getAttribute('data-theme') !== 'light';
   const gridColor = isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.06)';
   const textColor = isDark ? '#94a3b8' : '#64748b';
 
-  const commonOptions = {
-    responsive: true,
-    maintainAspectRatio: false,
-    plugins: { legend: { display: false } },
-  };
-
-  // Spending chart
-  const ctx1 = document.getElementById('spendingChart').getContext('2d');
   if (spendingChart) spendingChart.destroy();
+  if (providerChart) providerChart.destroy();
 
   const { labels, data } = getSpendingData(currentRange);
-
-  spendingChart = new Chart(ctx1, {
+  spendingChart = new Chart(canvas1.getContext('2d'), {
     type: 'bar',
     data: {
       labels,
@@ -183,39 +226,31 @@ function initCharts() {
         data,
         backgroundColor: data.map((_, i) => i === data.length - 1 ? '#6366f1' : 'rgba(99,102,241,0.3)'),
         borderRadius: 6,
-        borderSkipped: false,
+        borderSkipped: false
       }]
     },
     options: {
-      ...commonOptions,
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { display: false },
+        tooltip: { callbacks: { label: ctx => formatCurrency(Number(ctx.raw) || 0) } }
+      },
       scales: {
         x: { grid: { display: false }, ticks: { color: textColor, font: { size: 11 } } },
         y: {
+          beginAtZero: true,
           grid: { color: gridColor },
-          ticks: {
-            color: textColor,
-            font: { size: 11 },
-            callback: v => '$' + v.toFixed(2)
-          }
-        }
-      },
-      plugins: {
-        ...commonOptions.plugins,
-        tooltip: {
-          callbacks: { label: ctx => formatCurrency(ctx.raw) }
+          ticks: { color: textColor, font: { size: 11 }, callback: value => '$' + Number(value).toFixed(2) }
         }
       }
     }
   });
 
-  // Provider donut
-  const ctx2 = document.getElementById('providerChart').getContext('2d');
-  if (providerChart) providerChart.destroy();
-
   const providerData = getProviderData();
   if (providerData.labels.length === 0) return;
 
-  providerChart = new Chart(ctx2, {
+  providerChart = new Chart(canvas2.getContext('2d'), {
     type: 'doughnut',
     data: {
       labels: providerData.labels,
@@ -223,11 +258,12 @@ function initCharts() {
         data: providerData.data,
         backgroundColor: providerData.colors,
         borderWidth: 0,
-        spacing: 2,
+        spacing: 2
       }]
     },
     options: {
-      ...commonOptions,
+      responsive: true,
+      maintainAspectRatio: false,
       cutout: '65%',
       plugins: {
         legend: {
@@ -235,9 +271,7 @@ function initCharts() {
           position: 'bottom',
           labels: { color: textColor, padding: 12, font: { size: 12 }, usePointStyle: true, pointStyleWidth: 10 }
         },
-        tooltip: {
-          callbacks: { label: ctx => ` ${ctx.label}: ${formatCurrency(ctx.raw)}` }
-        }
+        tooltip: { callbacks: { label: ctx => ` ${ctx.label}: ${formatCurrency(Number(ctx.raw) || 0)}` } }
       }
     }
   });
@@ -255,16 +289,11 @@ function getSpendingData(days) {
   for (let i = days - 1; i >= 0; i--) {
     const d = new Date(now);
     d.setDate(d.getDate() - i);
-    const dateStr = d.toISOString().split('T')[0];
-    const dayTotal = entries.filter(e => e.date === dateStr).reduce((s, e) => s + e.cost, 0);
-
-    if (days <= 7) {
-      labels.push(d.toLocaleDateString('en', { weekday: 'short' }));
-    } else if (days <= 30) {
-      labels.push(d.toLocaleDateString('en', { month: 'short', day: 'numeric' }));
-    } else {
-      labels.push(d.toLocaleDateString('en', { month: 'short', day: 'numeric' }));
-    }
+    const dateKey = localDateKey(d);
+    const dayTotal = sum(entries.filter(e => e.date === dateKey), e => e.cost);
+    labels.push(days <= 7
+      ? d.toLocaleDateString(undefined, { weekday: 'short' })
+      : d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }));
     data.push(dayTotal);
   }
 
@@ -272,258 +301,439 @@ function getSpendingData(days) {
 }
 
 function getProviderData() {
-  const providerMap = {};
-  entries.forEach(e => {
-    providerMap[e.provider] = (providerMap[e.provider] || 0) + e.cost;
-  });
-
-  const sorted = Object.entries(providerMap).sort((a, b) => b[1] - a[1]);
+  const providerMap = new Map();
+  for (const entry of entries) {
+    providerMap.set(entry.provider, (providerMap.get(entry.provider) || 0) + entry.cost);
+  }
+  const sorted = [...providerMap.entries()].sort((a, b) => b[1] - a[1]);
   return {
     labels: sorted.map(([name]) => name),
     data: sorted.map(([, cost]) => cost),
-    colors: sorted.map(([name]) => PROVIDER_COLORS[name] || PROVIDER_COLORS['Other'])
+    colors: sorted.map(([name]) => PROVIDER_COLORS[name] || PROVIDER_COLORS.Other)
   };
 }
 
 function setRange(days, btn) {
-  currentRange = days;
+  currentRange = [7, 30, 90].includes(days) ? days : 7;
   document.querySelectorAll('.chip').forEach(c => c.classList.remove('active'));
-  btn.classList.add('active');
+  if (btn) btn.classList.add('active');
   updateCharts();
 }
 
 // =================== ENTRIES ===================
-function addEntry(e) {
-  e.preventDefault();
+function addEntry(event) {
+  event.preventDefault();
 
-  const entry = {
-    id: Date.now(),
-    provider: document.getElementById('provider').value,
-    model: document.getElementById('model').value,
-    cost: parseFloat(document.getElementById('cost').value),
-    tokens: parseInt(document.getElementById('tokens').value) || null,
-    date: document.getElementById('entryDate').value,
-    note: document.getElementById('note').value || ''
-  };
+  const provider = normalizeString(document.getElementById('provider')?.value, MAX_PROVIDER_LENGTH);
+  const model = normalizeString(document.getElementById('model')?.value, MAX_MODEL_LENGTH);
+  const cost = Number(document.getElementById('cost')?.value);
+  const tokenValue = document.getElementById('tokens')?.value;
+  const tokens = tokenValue === '' ? null : Number(tokenValue);
+  const date = document.getElementById('entryDate')?.value;
+  const note = normalizeString(document.getElementById('note')?.value, MAX_NOTE_LENGTH);
 
-  entries.unshift(entry);
+  if (!provider || !model || !Number.isFinite(cost) || cost < 0 || cost > MAX_COST) {
+    showToast('Enter a valid provider, model, and non-negative cost.');
+    return;
+  }
+
+  if (tokens !== null && (!Number.isInteger(tokens) || tokens < 0 || tokens > MAX_TOKENS)) {
+    showToast('Enter a valid non-negative token count.');
+    return;
+  }
+
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date || '')) {
+    showToast('Choose a valid date.');
+    return;
+  }
+
+  entries.unshift({
+    id: makeId(),
+    provider,
+    model,
+    cost: roundMoney(cost),
+    tokens,
+    date,
+    note
+  });
+
+  entries = entries.slice(0, MAX_ENTRIES);
   saveEntries();
-  document.getElementById('addForm').reset();
+  document.getElementById('addForm')?.reset();
   document.getElementById('entryDate').valueAsDate = new Date();
   initDashboard();
   showToast('Entry added successfully');
 }
 
 function deleteEntry(id) {
-  entries = entries.filter(e => e.id !== id);
+  entries = entries.filter(entry => entry.id !== id);
   saveEntries();
   initDashboard();
   showToast('Entry deleted');
 }
 
 function renderEntries() {
-  const filter = document.getElementById('filterProvider').value;
-  const filtered = filter ? entries.filter(e => e.provider === filter) : entries;
   const tbody = document.getElementById('entriesBody');
+  const filter = document.getElementById('filterProvider')?.value || '';
+  if (!tbody) return;
+
+  const filtered = filter ? entries.filter(e => e.provider === filter) : entries;
+  tbody.replaceChildren();
 
   if (filtered.length === 0) {
-    tbody.innerHTML = '<tr class="empty-row"><td colspan="7">No entries yet. Start tracking your AI costs above.</td></tr>';
+    const row = document.createElement('tr');
+    row.className = 'empty-row';
+    const cell = document.createElement('td');
+    cell.colSpan = 7;
+    cell.textContent = 'No entries yet. Start tracking your AI costs above.';
+    row.appendChild(cell);
+    tbody.appendChild(row);
     return;
   }
 
-  // Show up to 50 most recent
-  tbody.innerHTML = filtered.slice(0, 50).map(e => {
-    const tagClass = 'pt-' + e.provider.toLowerCase().replace(/\s+/g, '').replace('openai', 'openai').replace('googleai', 'google').replace('awsbedrock', 'aws').replace('azureopenai', 'azure');
-    return `
-      <tr>
-        <td>${formatDate(e.date)}</td>
-        <td><span class="provider-tag ${tagClass}">${e.provider}</span></td>
-        <td>${e.model}</td>
-        <td><strong>${formatCurrency(e.cost)}</strong></td>
-        <td>${e.tokens ? e.tokens.toLocaleString() : '-'}</td>
-        <td style="color:var(--text-muted)">${e.note || '-'}</td>
-        <td><button class="delete-btn" onclick="deleteEntry(${e.id})" title="Delete">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2"/></svg>
-        </button></td>
-      </tr>`;
-  }).join('');
+  for (const entry of filtered.slice(0, 50)) {
+    const row = document.createElement('tr');
+    row.append(
+      textCell(formatDate(entry.date)),
+      providerCell(entry.provider),
+      textCell(entry.model),
+      strongCell(formatCurrency(entry.cost)),
+      textCell(entry.tokens === null ? '-' : entry.tokens.toLocaleString()),
+      mutedCell(entry.note || '-')
+    );
+
+    const actionCell = document.createElement('td');
+    const deleteButton = document.createElement('button');
+    deleteButton.className = 'delete-btn';
+    deleteButton.type = 'button';
+    deleteButton.title = 'Delete';
+    deleteButton.setAttribute('aria-label', `Delete ${entry.model} entry`);
+    deleteButton.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 6h18M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2"/></svg>';
+    deleteButton.addEventListener('click', () => deleteEntry(entry.id));
+    actionCell.appendChild(deleteButton);
+    row.appendChild(actionCell);
+    tbody.appendChild(row);
+  }
 }
 
 function updateFilterOptions() {
-  const providers = [...new Set(entries.map(e => e.provider))].sort();
   const select = document.getElementById('filterProvider');
+  if (!select) return;
+
   const current = select.value;
-  select.innerHTML = '<option value="">All Providers</option>' +
-    providers.map(p => `<option value="${p}" ${p === current ? 'selected' : ''}>${p}</option>`).join('');
+  select.replaceChildren(new Option('All Providers', ''));
+  for (const provider of [...new Set(entries.map(e => e.provider))].sort()) {
+    select.add(new Option(provider, provider));
+  }
+  if ([...select.options].some(option => option.value === current)) {
+    select.value = current;
+  }
+}
+
+function filterEntries() {
+  renderEntries();
 }
 
 // =================== BUDGET ===================
-function setBudget(e) {
-  e.preventDefault();
-  const amount = parseFloat(document.getElementById('budgetAmount').value);
-  if (amount > 0) {
-    budget = amount;
-    localStorage.setItem(BUDGET_KEY, JSON.stringify(budget));
-    updateBudgetDisplay();
-    updateSummary();
-    showToast(`Monthly budget set to ${formatCurrency(amount)}`);
+function setBudget(event) {
+  event.preventDefault();
+  const amount = Number(document.getElementById('budgetAmount')?.value);
+
+  if (!Number.isFinite(amount) || amount <= 0 || amount > MAX_COST) {
+    showToast('Enter a valid monthly budget.');
+    return;
   }
+
+  budget = roundMoney(amount);
+  localStorage.setItem(BUDGET_KEY, JSON.stringify(budget));
+  document.getElementById('budgetAmount').value = '';
+  updateBudgetDisplay();
+  updateSummary();
+  showToast(`Monthly budget set to ${formatCurrency(budget)}`);
 }
 
 function updateBudgetDisplay() {
   const display = document.getElementById('budgetDisplay');
-  if (!budget) {
-    display.innerHTML = '';
-    return;
-  }
+  if (!display) return;
 
-  const now = new Date();
-  const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().split('T')[0];
-  const monthTotal = entries.filter(e => e.date >= monthStart).reduce((s, e) => s + e.cost, 0);
-  const pct = Math.min((monthTotal / budget * 100), 100);
+  display.replaceChildren();
+  if (!budget) return;
+
+  const monthStart = localDateKey(new Date(new Date().getFullYear(), new Date().getMonth(), 1));
+  const monthTotal = sum(entries.filter(e => e.date >= monthStart), e => e.cost);
+  const pct = budget > 0 ? Math.min(monthTotal / budget * 100, 100) : 0;
   const barClass = pct >= 100 ? 'danger' : pct >= 80 ? 'warning' : '';
 
-  display.innerHTML = `
-    <div class="budget-bar-wrap">
-      <div class="budget-bar ${barClass}" style="width: ${pct}%"></div>
-    </div>
-    <div class="budget-info">
-      <span>${formatCurrency(monthTotal)} spent</span>
-      <span>${formatCurrency(budget - monthTotal)} remaining</span>
-    </div>`;
+  const wrap = document.createElement('div');
+  wrap.className = 'budget-bar-wrap';
+  const bar = document.createElement('div');
+  bar.className = `budget-bar ${barClass}`.trim();
+  bar.style.width = `${pct}%`;
+  wrap.appendChild(bar);
+
+  const info = document.createElement('div');
+  info.className = 'budget-info';
+  const spent = document.createElement('span');
+  spent.textContent = `${formatCurrency(monthTotal)} spent`;
+  const remaining = document.createElement('span');
+  remaining.textContent = `${formatCurrency(Math.max(budget - monthTotal, 0))} remaining`;
+  info.append(spent, remaining);
+
+  display.append(wrap, info);
 }
 
 // =================== QUICK STATS ===================
 function updateQuickStats() {
   const container = document.getElementById('quickStats');
+  if (!container) return;
+  container.replaceChildren();
+
   if (entries.length === 0) {
-    container.innerHTML = '<div class="empty-state"><p>Add entries to see stats</p></div>';
+    container.appendChild(createEmptyState('Add entries to see stats.'));
     return;
   }
 
-  const costs = entries.map(e => e.cost);
-  const avgCost = costs.reduce((a, b) => a + b, 0) / costs.length;
+  const total = sum(entries, e => e.cost);
+  const avgCost = total / entries.length;
   const maxEntry = entries.reduce((max, e) => e.cost > max.cost ? e : max, entries[0]);
-  const totalTokens = entries.reduce((s, e) => s + (e.tokens || 0), 0);
+  const totalTokens = entries.reduce((totalTokens, e) => totalTokens + (e.tokens || 0), 0);
   const avgDaily = getAvgDailyCost();
 
-  container.innerHTML = `
-    <div class="qs-item"><span class="qs-label">Avg per call</span><span class="qs-value">${formatCurrency(avgCost)}</span></div>
-    <div class="qs-item"><span class="qs-label">Avg per day</span><span class="qs-value">${formatCurrency(avgDaily)}</span></div>
-    <div class="qs-item"><span class="qs-label">Most expensive</span><span class="qs-value">${formatCurrency(maxEntry.cost)}</span></div>
-    <div class="qs-item"><span class="qs-label">Total tokens</span><span class="qs-value">${totalTokens.toLocaleString()}</span></div>
-    <div class="qs-item"><span class="qs-label">Total entries</span><span class="qs-value">${entries.length}</span></div>`;
+  const rows = [
+    ['Avg per call', formatCurrency(avgCost)],
+    ['Avg per day', formatCurrency(avgDaily)],
+    ['Most expensive', formatCurrency(maxEntry.cost)],
+    ['Total tokens', totalTokens.toLocaleString()],
+    ['Total entries', entries.length.toLocaleString()]
+  ];
+
+  for (const [label, value] of rows) {
+    const item = document.createElement('div');
+    item.className = 'qs-item';
+    const labelEl = document.createElement('span');
+    labelEl.className = 'qs-label';
+    labelEl.textContent = label;
+    const valueEl = document.createElement('span');
+    valueEl.className = 'qs-value';
+    valueEl.textContent = value;
+    item.append(labelEl, valueEl);
+    container.appendChild(item);
+  }
 }
 
 function getAvgDailyCost() {
   if (entries.length === 0) return 0;
-  const dates = [...new Set(entries.map(e => e.date))];
-  const total = entries.reduce((s, e) => s + e.cost, 0);
-  return total / dates.length;
+  const dates = new Set(entries.map(e => e.date));
+  return sum(entries, e => e.cost) / dates.size;
 }
 
 // =================== EXPORT ===================
 function exportCSV() {
-  if (entries.length === 0) return showToast('No data to export');
+  if (entries.length === 0) {
+    showToast('No data to export');
+    return;
+  }
 
   const headers = ['Date', 'Provider', 'Model', 'Cost', 'Tokens', 'Note'];
   const rows = entries.map(e => [
-    e.date,
-    e.provider,
-    e.model,
-    e.cost.toFixed(4),
-    e.tokens || '',
-    `"${e.note.replace(/"/g, '""')}"`
+    csvCell(e.date),
+    csvCell(e.provider),
+    csvCell(e.model),
+    csvCell(e.cost.toFixed(4)),
+    csvCell(e.tokens === null ? '' : String(e.tokens)),
+    csvCell(e.note)
   ]);
 
-  const csv = [headers.join(','), ...rows.map(r => r.join(','))].join('\n');
-  const blob = new Blob([csv], { type: 'text/csv' });
+  const csv = [headers.map(csvCell).join(','), ...rows.map(row => row.join(','))].join('\r\n');
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
   const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = `costtracker-ai-export-${new Date().toISOString().split('T')[0]}.csv`;
-  a.click();
-  URL.revokeObjectURL(url);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = `costtracker-ai-${localDateKey(new Date())}.csv`;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
   showToast('CSV exported successfully');
 }
 
 // =================== CLEAR DATA ===================
 function clearAllData() {
-  if (confirm('Are you sure you want to delete all data? This cannot be undone.')) {
-    entries = [];
-    budget = null;
+  if (!window.confirm('Are you sure you want to delete all tracked data and the monthly budget? This cannot be undone.')) {
+    return;
+  }
+  entries = [];
+  budget = null;
+  localStorage.removeItem(STORAGE_KEY);
+  localStorage.removeItem(BUDGET_KEY);
+  initDashboard();
+  showToast('All data cleared');
+}
+
+// =================== STORAGE ===================
+function loadEntries() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
+    if (!Array.isArray(raw)) return [];
+    const valid = raw.map(normalizeStoredEntry).filter(Boolean);
+    return valid.slice(0, MAX_ENTRIES);
+  } catch {
     localStorage.removeItem(STORAGE_KEY);
+    return [];
+  }
+}
+
+function loadBudget() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(BUDGET_KEY) || 'null');
+    return Number.isFinite(raw) && raw > 0 && raw <= MAX_COST ? roundMoney(raw) : null;
+  } catch {
     localStorage.removeItem(BUDGET_KEY);
-    initDashboard();
-    showToast('All data cleared');
+    return null;
+  }
+}
+
+function normalizeStoredEntry(entry) {
+  if (!entry || typeof entry !== 'object') return null;
+
+  const provider = normalizeString(entry.provider, MAX_PROVIDER_LENGTH);
+  const model = normalizeString(entry.model, MAX_MODEL_LENGTH);
+  const note = normalizeString(entry.note, MAX_NOTE_LENGTH);
+  const cost = Number(entry.cost);
+  const tokens = entry.tokens === null || entry.tokens === '' || typeof entry.tokens === 'undefined'
+    ? null
+    : Number(entry.tokens);
+  const date = typeof entry.date === 'string' ? entry.date : '';
+
+  if (!provider || !model || !Number.isFinite(cost) || cost < 0 || cost > MAX_COST) return null;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return null;
+  if (tokens !== null && (!Number.isInteger(tokens) || tokens < 0 || tokens > MAX_TOKENS)) return null;
+
+  return {
+    id: typeof entry.id === 'string' || typeof entry.id === 'number' ? entry.id : makeId(),
+    provider,
+    model,
+    cost: roundMoney(cost),
+    tokens,
+    date,
+    note
+  };
+}
+
+function saveEntries() {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(entries.slice(0, MAX_ENTRIES)));
+  } catch {
+    showToast('Storage is full. Export your data and remove older entries.');
   }
 }
 
 // =================== HELPERS ===================
-function saveEntries() {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(entries));
+function setText(id, value) {
+  const element = document.getElementById(id);
+  if (element) element.textContent = value;
 }
 
-function formatCurrency(n) {
-  return '$' + n.toFixed(2);
+function createEmptyState(message) {
+  const wrapper = document.createElement('div');
+  wrapper.className = 'empty-state';
+  const p = document.createElement('p');
+  p.textContent = message;
+  wrapper.appendChild(p);
+  return wrapper;
+}
+
+function textCell(value) {
+  const cell = document.createElement('td');
+  cell.textContent = value;
+  return cell;
+}
+
+function strongCell(value) {
+  const cell = document.createElement('td');
+  const strong = document.createElement('strong');
+  strong.textContent = value;
+  cell.appendChild(strong);
+  return cell;
+}
+
+function mutedCell(value) {
+  const cell = textCell(value);
+  cell.style.color = 'var(--text-muted)';
+  return cell;
+}
+
+function providerCell(provider) {
+  const cell = document.createElement('td');
+  const tag = document.createElement('span');
+  tag.className = `provider-tag ${providerClass(provider)}`;
+  tag.textContent = provider;
+  cell.appendChild(tag);
+  return cell;
+}
+
+function providerClass(provider) {
+  const normalized = provider.toLowerCase().replace(/\s+/g, '');
+  if (normalized === 'openai') return 'pt-openai';
+  if (normalized === 'anthropic') return 'pt-anthropic';
+  if (normalized === 'googleai') return 'pt-google';
+  if (normalized === 'mistral') return 'pt-mistral';
+  if (normalized === 'cohere') return 'pt-cohere';
+  if (normalized === 'awsbedrock') return 'pt-aws';
+  if (normalized === 'azureopenai') return 'pt-azure';
+  return 'pt-other';
+}
+
+function csvCell(value) {
+  const stringValue = String(value ?? '');
+  return `"${stringValue.replace(/"/g, '""')}"`;
+}
+
+function normalizeString(value, maxLength) {
+  return typeof value === 'string' ? value.trim().slice(0, maxLength) : '';
+}
+
+function makeId() {
+  if (window.crypto?.randomUUID) return window.crypto.randomUUID();
+  return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function roundMoney(value) {
+  return Math.round(value * 10000) / 10000;
+}
+
+function sum(items, mapper) {
+  return items.reduce((total, item) => total + mapper(item), 0);
+}
+
+function localDateKey(date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function formatCurrency(value) {
+  return new Intl.NumberFormat(undefined, {
+    style: 'currency',
+    currency: 'USD',
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2
+  }).format(value);
 }
 
 function formatDate(dateStr) {
-  const d = new Date(dateStr + 'T00:00:00');
-  return d.toLocaleDateString('en', { month: 'short', day: 'numeric', year: 'numeric' });
+  const date = new Date(`${dateStr}T00:00:00`);
+  return Number.isNaN(date.getTime())
+    ? dateStr
+    : date.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
 }
 
-function showToast(msg) {
-  const existing = document.querySelector('.toast');
-  if (existing) existing.remove();
-
+function showToast(message) {
+  document.querySelector('.toast')?.remove();
   const toast = document.createElement('div');
   toast.className = 'toast';
-  toast.textContent = msg;
+  toast.textContent = message;
   document.body.appendChild(toast);
-  setTimeout(() => toast.remove(), 3000);
-}
-
-// =================== DEMO DATA ===================
-// Add sample data if empty for a better first experience
-if (entries.length === 0) {
-  const models = {
-    'OpenAI': ['gpt-4o', 'gpt-4o-mini', 'o1-preview'],
-    'Anthropic': ['claude-opus-4-6', 'claude-sonnet-4-6', 'claude-haiku-4-5'],
-    'Google AI': ['gemini-2.0-flash', 'gemini-2.0-pro'],
-    'Mistral': ['mistral-large', 'codestral'],
-  };
-
-  const notes = ['Production chatbot', 'Code review agent', 'Data extraction', 'Testing', 'Customer support bot', 'RAG pipeline', ''];
-  const now = new Date();
-
-  for (let i = 30; i >= 0; i--) {
-    const d = new Date(now);
-    d.setDate(d.getDate() - i);
-    const date = d.toISOString().split('T')[0];
-    const numEntries = Math.floor(Math.random() * 4) + 1;
-
-    for (let j = 0; j < numEntries; j++) {
-      const providers = Object.keys(models);
-      const provider = providers[Math.floor(Math.random() * providers.length)];
-      const providerModels = models[provider];
-      const model = providerModels[Math.floor(Math.random() * providerModels.length)];
-      const cost = Math.random() * 3 + 0.01;
-      const tokens = Math.floor(Math.random() * 50000) + 500;
-
-      entries.push({
-        id: Date.now() + i * 100 + j,
-        provider,
-        model,
-        cost: parseFloat(cost.toFixed(4)),
-        tokens,
-        date,
-        note: notes[Math.floor(Math.random() * notes.length)]
-      });
-    }
-  }
-
-  budget = 200;
-  localStorage.setItem(BUDGET_KEY, JSON.stringify(budget));
-  saveEntries();
+  window.setTimeout(() => toast.remove(), 3000);
 }
