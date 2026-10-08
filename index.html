@@ -3,8 +3,10 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://cdnjs.cloudflare.com; style-src 'self'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none';">
+  <meta name="referrer" content="strict-origin-when-cross-origin">
   <title>CostTracker AI — Track Your AI API Spending</title>
-  <meta name="description" content="Beautiful, real-time AI API cost tracking dashboard. Monitor spending across OpenAI, Anthropic, Google, Mistral and more.">
+  <meta name="description" content="Privacy-first browser dashboard for manually tracking AI API spending across OpenAI, Anthropic, Google, Mistral and more.">
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📊</text></svg>">
   <link rel="stylesheet" href="style.css">
 </head>
@@ -55,7 +57,7 @@
       <div class="mock-dashboard">
         <div class="mock-header">
           <div class="mock-dots"><span></span><span></span><span></span></div>
-          <span class="mock-title">costtracker.io</span>
+          <span class="mock-title">CostTracker AI preview</span>
         </div>
         <div class="mock-body">
           <div class="mock-chart">
@@ -94,8 +96,8 @@
         <div class="feature-icon fi-1">
           <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6"/></svg>
         </div>
-        <h3>Real-time Cost Tracking</h3>
-        <p>Log every API call with cost, tokens, and model info. See spending update in real time.</p>
+        <h3>Manual Cost Tracking</h3>
+        <p>Log API costs, tokens, model information, and notes. Your dashboard updates immediately in the browser.</p>
       </div>
       <div class="feature-card">
         <div class="feature-icon fi-2">
@@ -109,21 +111,21 @@
           <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 11-6.219-8.56"/><path d="M21 3v5h-5"/></svg>
         </div>
         <h3>Budget Alerts</h3>
-        <p>Set spending limits per provider or project. Get warned before you overspend.</p>
+        <p>Set a monthly spending limit and get warned at 80% and 100% usage.</p>
       </div>
       <div class="feature-card">
         <div class="feature-icon fi-4">
           <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><path d="M14 2v6h6M16 13H8M16 17H8M10 9H8"/></svg>
         </div>
         <h3>Export & Reports</h3>
-        <p>Export data to CSV. Generate weekly or monthly reports for your team.</p>
+        <p>Export your locally stored tracking data to CSV for reporting or analysis.</p>
       </div>
       <div class="feature-card">
         <div class="feature-icon fi-5">
           <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
         </div>
         <h3>Privacy First</h3>
-        <p>All data stored locally in your browser. Nothing ever leaves your machine.</p>
+        <p>Tracked data stays in your browser. No billing credentials are collected.</p>
       </div>
       <div class="feature-card">
         <div class="feature-icon fi-6">
