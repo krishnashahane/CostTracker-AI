@@ -575,7 +575,7 @@ function clearAllData() {
 // =================== STORAGE ===================
 function loadEntries() {
   try {
-    const raw = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
+    const raw = JSON.parse(getStorageItem(STORAGE_KEY) || '[]');
     if (!Array.isArray(raw)) return [];
     const valid = raw.map(normalizeStoredEntry).filter(Boolean);
     return valid.slice(0, MAX_ENTRIES);
@@ -587,7 +587,7 @@ function loadEntries() {
 
 function loadBudget() {
   try {
-    const raw = JSON.parse(localStorage.getItem(BUDGET_KEY) || 'null');
+    const raw = JSON.parse(getStorageItem(BUDGET_KEY) || 'null');
     return Number.isFinite(raw) && raw > 0 && raw <= MAX_COST ? roundMoney(raw) : null;
   } catch {
     safeRemoveStorage(BUDGET_KEY);
@@ -629,6 +629,31 @@ function saveEntries() {
     }
   } catch {
     showToast('Storage is full. Export your data and remove older entries.');
+  }
+}
+
+function getStorageItem(key) {
+  try {
+    return window.localStorage?.getItem(key) ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function setStorageItem(key, value) {
+  try {
+    window.localStorage?.setItem(key, value);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function removeStorageItem(key) {
+  try {
+    window.localStorage?.removeItem(key);
+  } catch {
+    // Storage may be unavailable in privacy-restricted contexts.
   }
 }
 
