@@ -28,7 +28,7 @@ let currentRange = 7;
 
 // =================== INIT ===================
 document.addEventListener('DOMContentLoaded', () => {
-  const savedTheme = localStorage.getItem(THEME_KEY);
+  const savedTheme = safeGetStorage(THEME_KEY);
   if (savedTheme === 'dark' || savedTheme === 'light') {
     document.documentElement.setAttribute('data-theme', savedTheme);
   }
@@ -66,7 +66,7 @@ function toggleTheme() {
   const html = document.documentElement;
   const next = html.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
   html.setAttribute('data-theme', next);
-  localStorage.setItem(THEME_KEY, next);
+  safeSetStorage(THEME_KEY, next);
   if (document.getElementById('app') && !document.getElementById('app').classList.contains('hidden')) {
     updateCharts();
   }
@@ -445,7 +445,9 @@ function setBudget(event) {
   }
 
   budget = roundMoney(amount);
-  localStorage.setItem(BUDGET_KEY, JSON.stringify(budget));
+  if (!safeSetStorage(BUDGET_KEY, JSON.stringify(budget))) {
+    showToast('Browser storage is unavailable; the budget may not persist.');
+  }
   document.getElementById('budgetAmount').value = '';
   updateBudgetDisplay();
   updateSummary();
@@ -564,8 +566,8 @@ function clearAllData() {
   }
   entries = [];
   budget = null;
-  localStorage.removeItem(STORAGE_KEY);
-  localStorage.removeItem(BUDGET_KEY);
+  safeRemoveStorage(STORAGE_KEY);
+  safeRemoveStorage(BUDGET_KEY);
   initDashboard();
   showToast('All data cleared');
 }
@@ -578,7 +580,7 @@ function loadEntries() {
     const valid = raw.map(normalizeStoredEntry).filter(Boolean);
     return valid.slice(0, MAX_ENTRIES);
   } catch {
-    localStorage.removeItem(STORAGE_KEY);
+    safeRemoveStorage(STORAGE_KEY);
     return [];
   }
 }
@@ -588,7 +590,7 @@ function loadBudget() {
     const raw = JSON.parse(localStorage.getItem(BUDGET_KEY) || 'null');
     return Number.isFinite(raw) && raw > 0 && raw <= MAX_COST ? roundMoney(raw) : null;
   } catch {
-    localStorage.removeItem(BUDGET_KEY);
+    safeRemoveStorage(BUDGET_KEY);
     return null;
   }
 }
@@ -622,13 +624,40 @@ function normalizeStoredEntry(entry) {
 
 function saveEntries() {
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(entries.slice(0, MAX_ENTRIES)));
+    if (!safeSetStorage(STORAGE_KEY, JSON.stringify(entries.slice(0, MAX_ENTRIES)))) {
+      showToast('Browser storage is unavailable. Export your data before leaving the page.');
+    }
   } catch {
     showToast('Storage is full. Export your data and remove older entries.');
   }
 }
 
 // =================== HELPERS ===================
+function safeGetStorage(key) {
+  try {
+    return localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+function safeSetStorage(key, value) {
+  try {
+    localStorage.setItem(key, value);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function safeRemoveStorage(key) {
+  try {
+    localStorage.removeItem(key);
+  } catch {
+    // Storage may be disabled by browser policy.
+  }
+}
+
 function setText(id, value) {
   const element = document.getElementById(id);
   if (element) element.textContent = value;
