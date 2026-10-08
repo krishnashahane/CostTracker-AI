@@ -25,7 +25,7 @@
       <div class="nav-links">
         <a href="#features">Features</a>
         <a href="#pricing">Pricing</a>
-        <a href="https://github.com/krishnashahane/CostTracker-AI" target="_blank">GitHub</a>
+        <a href="https://github.com/krishnashahane/CostTracker-AI" target="_blank" rel="noopener noreferrer">GitHub</a>
         <button class="btn btn-sm" onclick="showApp()">Open Dashboard</button>
       </div>
       <button class="mobile-menu-btn" onclick="toggleMobileMenu()" aria-label="Menu">
@@ -221,7 +221,7 @@
               <button class="chip" data-range="90" onclick="setRange(90, this)">90D</button>
             </div>
           </div>
-          <canvas id="spendingChart" height="260"></canvas>
+          <canvas id="spendingChart" height="260"></canvas><div id="spendingChartFallback" class="empty-state hidden"><p>Charts are unavailable because the chart library could not be loaded. Your tracked data is still available below.</p></div>
         </div>
 
         <!-- Provider Breakdown -->
@@ -343,7 +343,9 @@
     </footer>
   </section>
 
-  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.5.1/chart.umd.min.js"
+    integrity="sha512-WoViKhKD4qI2WruSZqv9+kvM4WfFhUMQCLN4QlDTt5aU56fLQy2gYoxWIqlEnXqJy/+Ac5q/hk1oWfqnMDhwMA=="
+    crossorigin="anonymous" referrerpolicy="no-referrer"></script>
   <script src="app.js"></script>
 </body>
 </html>
