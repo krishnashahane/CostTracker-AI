@@ -2,6 +2,8 @@
 const STORAGE_KEY = 'costtracker_entries';
 const BUDGET_KEY = 'costtracker_budget';
 const THEME_KEY = 'costtracker_theme';
+const BACKUP_KEY = 'costtracker_entries_backup';
+const STORAGE_WARNING = 'Saved for this session only: browser storage is unavailable or full. Export your data before leaving the page.';
 const MAX_ENTRIES = 5000;
 const MAX_PROVIDER_LENGTH = 64;
 const MAX_MODEL_LENGTH = 128;
@@ -20,6 +22,8 @@ const PROVIDER_COLORS = {
   'Other': '#6366f1'
 };
 
+// Must be declared before loadEntries() runs (it may flag a recovered backup).
+let recoveredStoredData = false;
 let entries = loadEntries();
 let budget = loadBudget();
 let spendingChart = null;
@@ -36,8 +40,58 @@ document.addEventListener('DOMContentLoaded', () => {
   const dateInput = document.getElementById('entryDate');
   if (dateInput) dateInput.valueAsDate = new Date();
 
+  bindEvents();
+
   if (window.location.hash === '#app') showApp();
+  if (recoveredStoredData) {
+    showToast('Some saved data could not be read. A backup copy was kept in your browser storage.');
+  }
 });
+
+// Inline event handlers are blocked by the page's Content Security Policy,
+// so every control is wired up here instead.
+function bindEvents() {
+  const actions = {
+    'show-app': showApp,
+    'show-landing': showLanding,
+    'toggle-menu': toggleMobileMenu,
+    'toggle-theme': toggleTheme,
+    'export-csv': exportCSV,
+    'clear-data': clearAllData,
+    'dismiss-alert': target => target.closest('.budget-alert')?.classList.add('hidden')
+  };
+
+  document.addEventListener('click', event => {
+    const target = event.target instanceof Element ? event.target : null;
+    if (!target) return;
+
+    const actionEl = target.closest('[data-action]');
+    if (actionEl && Object.hasOwn(actions, actionEl.dataset.action)) {
+      actions[actionEl.dataset.action](actionEl);
+      return;
+    }
+
+    const chip = target.closest('.chip[data-range]');
+    if (chip) setRange(Number(chip.dataset.range), chip);
+  });
+
+  document.querySelector('.app-brand')?.addEventListener('keydown', event => {
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      showLanding();
+    }
+  });
+
+  document.getElementById('addForm')?.addEventListener('submit', addEntry);
+  document.getElementById('budgetForm')?.addEventListener('submit', setBudget);
+  document.getElementById('filterProvider')?.addEventListener('change', renderEntries);
+
+  window.addEventListener('hashchange', () => {
+    const appHidden = document.getElementById('app')?.classList.contains('hidden');
+    if (window.location.hash === '#app' && appHidden) showApp();
+    else if (window.location.hash !== '#app' && appHidden === false) showLanding();
+  });
+}
 
 // =================== NAVIGATION ===================
 function showApp() {
@@ -58,7 +112,8 @@ function showLanding() {
 }
 
 function toggleMobileMenu() {
-  document.querySelector('.nav-links')?.classList.toggle('open');
+  const isOpen = document.querySelector('.nav-links')?.classList.toggle('open') ?? false;
+  document.querySelector('.mobile-menu-btn')?.setAttribute('aria-expanded', String(isOpen));
 }
 
 // =================== THEME ===================
@@ -86,16 +141,16 @@ function initDashboard() {
 function updateSummary() {
   const now = new Date();
   const today = localDateKey(now);
-  const monthStart = localDateKey(new Date(now.getFullYear(), now.getMonth(), 1));
-  const weekAgo = localDateKey(new Date(now.getTime() - 7 * 86400000));
-  const twoWeeksAgo = localDateKey(new Date(now.getTime() - 14 * 86400000));
+  // Last 7 calendar days including today, compared with the 7 days before that.
+  const weekStart = dateKeyDaysAgo(now, 6);
+  const prevWeekStart = dateKeyDaysAgo(now, 13);
 
   const total = sum(entries, e => e.cost);
   const todayEntries = entries.filter(e => e.date === today);
   const todayTotal = sum(todayEntries, e => e.cost);
-  const monthTotal = sum(entries.filter(e => e.date >= monthStart), e => e.cost);
-  const weekTotal = sum(entries.filter(e => e.date >= weekAgo), e => e.cost);
-  const prevWeekTotal = sum(entries.filter(e => e.date >= twoWeeksAgo && e.date < weekAgo), e => e.cost);
+  const monthTotal = getMonthTotal(now);
+  const weekTotal = sum(entries.filter(e => e.date >= weekStart && e.date <= today), e => e.cost);
+  const prevWeekTotal = sum(entries.filter(e => e.date >= prevWeekStart && e.date < weekStart), e => e.cost);
   const providers = new Set(entries.map(e => e.provider));
 
   setText('totalSpent', formatCurrency(total));
@@ -136,7 +191,7 @@ function updateSummary() {
 
 function updateProviders() {
   const list = document.getElementById('providerList');
-  const chart = document.getElementById('providerChart');
+  const chart = document.getElementById('providerChart')?.closest('.chart-box');
   if (!list || !chart) return;
 
   const providerMap = new Map();
@@ -205,10 +260,12 @@ function initCharts() {
   if (typeof window.Chart !== 'function') {
     const fallback = document.getElementById('spendingChartFallback');
     fallback?.classList.remove('hidden');
+    canvas1.closest('.chart-box')?.classList.add('hidden');
     return;
   }
 
   document.getElementById('spendingChartFallback')?.classList.add('hidden');
+  canvas1.closest('.chart-box')?.classList.remove('hidden');
 
   const isDark = document.documentElement.getAttribute('data-theme') !== 'light';
   const gridColor = isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.06)';
@@ -216,6 +273,8 @@ function initCharts() {
 
   if (spendingChart) spendingChart.destroy();
   if (providerChart) providerChart.destroy();
+  spendingChart = null;
+  providerChart = null;
 
   const { labels, data } = getSpendingData(currentRange);
   spendingChart = new Chart(canvas1.getContext('2d'), {
@@ -315,8 +374,14 @@ function getProviderData() {
 
 function setRange(days, btn) {
   currentRange = [7, 30, 90].includes(days) ? days : 7;
-  document.querySelectorAll('.chip').forEach(c => c.classList.remove('active'));
-  if (btn) btn.classList.add('active');
+  document.querySelectorAll('.chip').forEach(c => {
+    c.classList.remove('active');
+    c.setAttribute('aria-pressed', 'false');
+  });
+  if (btn) {
+    btn.classList.add('active');
+    btn.setAttribute('aria-pressed', 'true');
+  }
   updateCharts();
 }
 
@@ -342,7 +407,7 @@ function addEntry(event) {
     return;
   }
 
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(date || '')) {
+  if (!isValidDateKey(date)) {
     showToast('Choose a valid date.');
     return;
   }
@@ -357,19 +422,27 @@ function addEntry(event) {
     note
   });
 
+  const trimmed = entries.length > MAX_ENTRIES;
   entries = entries.slice(0, MAX_ENTRIES);
-  saveEntries();
+  const saved = saveEntries();
   document.getElementById('addForm')?.reset();
-  document.getElementById('entryDate').valueAsDate = new Date();
+  const dateInput = document.getElementById('entryDate');
+  if (dateInput) dateInput.valueAsDate = new Date();
   initDashboard();
-  showToast('Entry added successfully');
+  if (!saved) {
+    showToast(STORAGE_WARNING);
+  } else {
+    showToast(trimmed
+      ? `Entry added. Oldest entry removed (limit ${MAX_ENTRIES.toLocaleString()} entries).`
+      : 'Entry added successfully');
+  }
 }
 
 function deleteEntry(id) {
   entries = entries.filter(entry => entry.id !== id);
-  saveEntries();
+  const saved = saveEntries();
   initDashboard();
-  showToast('Entry deleted');
+  showToast(saved ? 'Entry deleted' : STORAGE_WARNING);
 }
 
 function renderEntries() {
@@ -430,10 +503,6 @@ function updateFilterOptions() {
   }
 }
 
-function filterEntries() {
-  renderEntries();
-}
-
 // =================== BUDGET ===================
 function setBudget(event) {
   event.preventDefault();
@@ -461,8 +530,7 @@ function updateBudgetDisplay() {
   display.replaceChildren();
   if (!budget) return;
 
-  const monthStart = localDateKey(new Date(new Date().getFullYear(), new Date().getMonth(), 1));
-  const monthTotal = sum(entries.filter(e => e.date >= monthStart), e => e.cost);
+  const monthTotal = getMonthTotal(new Date());
   const pct = budget > 0 ? Math.min(monthTotal / budget * 100, 100) : 0;
   const barClass = pct >= 100 ? 'danger' : pct >= 80 ? 'warning' : '';
 
@@ -536,17 +604,7 @@ function exportCSV() {
     return;
   }
 
-  const headers = ['Date', 'Provider', 'Model', 'Cost', 'Tokens', 'Note'];
-  const rows = entries.map(e => [
-    csvCell(e.date),
-    csvCell(e.provider),
-    csvCell(e.model),
-    csvCell(e.cost.toFixed(4)),
-    csvCell(e.tokens === null ? '' : String(e.tokens)),
-    csvCell(e.note)
-  ]);
-
-  const csv = [headers.map(csvCell).join(','), ...rows.map(row => row.join(','))].join('\r\n');
+  const csv = buildCSV(entries);
   const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
   const url = URL.createObjectURL(blob);
   const link = document.createElement('a');
@@ -559,6 +617,19 @@ function exportCSV() {
   showToast('CSV exported successfully');
 }
 
+function buildCSV(items) {
+  const headers = ['Date', 'Provider', 'Model', 'Cost', 'Tokens', 'Note'];
+  const rows = items.map(e => [
+    csvCell(e.date),
+    csvCell(e.provider),
+    csvCell(e.model),
+    csvCell(e.cost.toFixed(4)),
+    csvCell(e.tokens === null ? '' : String(e.tokens)),
+    csvCell(e.note)
+  ]);
+  return [headers.map(csvCell).join(','), ...rows.map(row => row.join(','))].join('\r\n');
+}
+
 // =================== CLEAR DATA ===================
 function clearAllData() {
   if (!window.confirm('Are you sure you want to delete all tracked data and the monthly budget? This cannot be undone.')) {
@@ -568,29 +639,56 @@ function clearAllData() {
   budget = null;
   safeRemoveStorage(STORAGE_KEY);
   safeRemoveStorage(BUDGET_KEY);
+  safeRemoveStorage(BACKUP_KEY);
   initDashboard();
   showToast('All data cleared');
 }
 
 // =================== STORAGE ===================
 function loadEntries() {
+  const rawText = safeGetStorage(STORAGE_KEY);
+  if (rawText === null) return [];
+
+  let parsed;
   try {
-    const raw = JSON.parse(getStorageItem(STORAGE_KEY) || '[]');
-    if (!Array.isArray(raw)) return [];
-    const valid = raw.map(normalizeStoredEntry).filter(Boolean);
-    return valid.slice(0, MAX_ENTRIES);
+    parsed = JSON.parse(rawText);
   } catch {
-    safeRemoveStorage(STORAGE_KEY);
+    backupStoredData(rawText);
     return [];
   }
+  if (!Array.isArray(parsed)) {
+    backupStoredData(rawText);
+    return [];
+  }
+
+  const seenIds = new Set();
+  const valid = [];
+  for (const item of parsed) {
+    const entry = normalizeStoredEntry(item);
+    if (!entry) continue;
+    // Duplicate ids would make one delete remove several rows.
+    if (seenIds.has(entry.id)) entry.id = makeId();
+    seenIds.add(entry.id);
+    valid.push(entry);
+  }
+
+  // Keep a copy of anything that is about to be discarded instead of deleting user data.
+  if (valid.length !== parsed.length || valid.length > MAX_ENTRIES) backupStoredData(rawText);
+  return valid.slice(0, MAX_ENTRIES);
+}
+
+function backupStoredData(rawText) {
+  recoveredStoredData = true;
+  safeSetStorage(BACKUP_KEY, rawText);
 }
 
 function loadBudget() {
+  const rawText = safeGetStorage(BUDGET_KEY);
+  if (rawText === null) return null;
   try {
-    const raw = JSON.parse(getStorageItem(BUDGET_KEY) || 'null');
+    const raw = JSON.parse(rawText);
     return Number.isFinite(raw) && raw > 0 && raw <= MAX_COST ? roundMoney(raw) : null;
   } catch {
-    safeRemoveStorage(BUDGET_KEY);
     return null;
   }
 }
@@ -608,7 +706,7 @@ function normalizeStoredEntry(entry) {
   const date = typeof entry.date === 'string' ? entry.date : '';
 
   if (!provider || !model || !Number.isFinite(cost) || cost < 0 || cost > MAX_COST) return null;
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return null;
+  if (!isValidDateKey(date)) return null;
   if (tokens !== null && (!Number.isInteger(tokens) || tokens < 0 || tokens > MAX_TOKENS)) return null;
 
   return {
@@ -622,39 +720,10 @@ function normalizeStoredEntry(entry) {
   };
 }
 
+// Returns true when the entries were persisted. Callers decide which toast to show
+// so that a failure warning is not immediately replaced by a success message.
 function saveEntries() {
-  try {
-    if (!safeSetStorage(STORAGE_KEY, JSON.stringify(entries.slice(0, MAX_ENTRIES)))) {
-      showToast('Browser storage is unavailable. Export your data before leaving the page.');
-    }
-  } catch {
-    showToast('Storage is full. Export your data and remove older entries.');
-  }
-}
-
-function getStorageItem(key) {
-  try {
-    return window.localStorage?.getItem(key) ?? null;
-  } catch {
-    return null;
-  }
-}
-
-function setStorageItem(key, value) {
-  try {
-    window.localStorage?.setItem(key, value);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function removeStorageItem(key) {
-  try {
-    window.localStorage?.removeItem(key);
-  } catch {
-    // Storage may be unavailable in privacy-restricted contexts.
-  }
+  return safeSetStorage(STORAGE_KEY, JSON.stringify(entries.slice(0, MAX_ENTRIES)));
 }
 
 // =================== HELPERS ===================
@@ -739,7 +808,9 @@ function providerClass(provider) {
 }
 
 function csvCell(value) {
-  const stringValue = String(value ?? '');
+  let stringValue = String(value ?? '');
+  // Neutralise spreadsheet formula injection (OWASP "CSV Injection").
+  if (/^[=+\-@\t\r]/.test(stringValue)) stringValue = `'${stringValue}`;
   return `"${stringValue.replace(/"/g, '""')}"`;
 }
 
@@ -758,6 +829,23 @@ function roundMoney(value) {
 
 function sum(items, mapper) {
   return items.reduce((total, item) => total + mapper(item), 0);
+}
+
+function isValidDateKey(value) {
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const [year, month, day] = value.split('-').map(Number);
+  const date = new Date(year, month - 1, day);
+  return date.getFullYear() === year && date.getMonth() === month - 1 && date.getDate() === day;
+}
+
+function dateKeyDaysAgo(from, days) {
+  return localDateKey(new Date(from.getFullYear(), from.getMonth(), from.getDate() - days));
+}
+
+function getMonthTotal(now) {
+  const monthStart = localDateKey(new Date(now.getFullYear(), now.getMonth(), 1));
+  const nextMonthStart = localDateKey(new Date(now.getFullYear(), now.getMonth() + 1, 1));
+  return sum(entries.filter(e => e.date >= monthStart && e.date < nextMonthStart), e => e.cost);
 }
 
 function localDateKey(date) {
@@ -787,6 +875,8 @@ function showToast(message) {
   document.querySelector('.toast')?.remove();
   const toast = document.createElement('div');
   toast.className = 'toast';
+  toast.setAttribute('role', 'status');
+  toast.setAttribute('aria-live', 'polite');
   toast.textContent = message;
   document.body.appendChild(toast);
   window.setTimeout(() => toast.remove(), 3000);

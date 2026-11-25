@@ -8,7 +8,7 @@
   --border-hover: #334155;
   --text: #f1f5f9;
   --text-secondary: #94a3b8;
-  --text-muted: #64748b;
+  --text-muted: #8191a8; /* >= 4.5:1 on all dark surfaces (WCAG AA) */
   --primary: #6366f1;
   --primary-hover: #818cf8;
   --primary-bg: rgba(99, 102, 241, 0.1);
@@ -34,7 +34,7 @@
   --border-hover: #cbd5e1;
   --text: #0f172a;
   --text-secondary: #475569;
-  --text-muted: #94a3b8;
+  --text-muted: #586880; /* >= 4.5:1 on all light surfaces (WCAG AA) */
   --primary-bg: rgba(99, 102, 241, 0.08);
   --green-bg: rgba(34, 197, 94, 0.08);
   --red-bg: rgba(239, 68, 68, 0.08);
@@ -267,20 +267,20 @@ a:hover { color: var(--primary-hover); }
 
 .bar {
   flex: 1;
-  height: var(--h);
+  height: var(--h, 50%);
   background: linear-gradient(to top, rgba(99,102,241,0.3), rgba(99,102,241,0.7));
   border-radius: 6px 6px 0 0;
   position: relative;
   transition: all 0.3s;
   animation: barGrow 1s ease-out backwards;
 }
-.bar:nth-child(1) { animation-delay: 0.1s; }
-.bar:nth-child(2) { animation-delay: 0.2s; }
-.bar:nth-child(3) { animation-delay: 0.3s; }
-.bar:nth-child(4) { animation-delay: 0.4s; }
-.bar:nth-child(5) { animation-delay: 0.5s; }
-.bar:nth-child(6) { animation-delay: 0.6s; }
-.bar:nth-child(7) { animation-delay: 0.7s; }
+.bar:nth-child(1) { --h: 40%; animation-delay: 0.1s; }
+.bar:nth-child(2) { --h: 65%; animation-delay: 0.2s; }
+.bar:nth-child(3) { --h: 45%; animation-delay: 0.3s; }
+.bar:nth-child(4) { --h: 80%; animation-delay: 0.4s; }
+.bar:nth-child(5) { --h: 55%; animation-delay: 0.5s; }
+.bar:nth-child(6) { --h: 90%; animation-delay: 0.6s; }
+.bar:nth-child(7) { --h: 70%; animation-delay: 0.7s; }
 
 @keyframes barGrow { from { height: 0; } }
 
@@ -761,4 +761,27 @@ a:hover { color: var(--primary-hover); }
   .summary-cards { grid-template-columns: 1fr; }
   .hero-stats { flex-direction: column; gap: 16px; }
   .hero-actions { flex-direction: column; align-items: center; }
+}
+
+/* =================== UTILITIES & ACCESSIBILITY =================== */
+.section-header-spaced { margin-top: 2rem; }
+
+/* Chart.js (responsive, maintainAspectRatio: false) needs a container with a fixed height,
+   otherwise the canvas keeps growing on every resize. */
+.chart-box { position: relative; height: 260px; width: 100%; }
+.chart-box-provider { height: 240px; margin-top: 16px; }
+.app-brand { cursor: pointer; }
+
+:focus-visible {
+  outline: 2px solid var(--primary-hover);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }
