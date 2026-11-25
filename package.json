@@ -1,0 +1,28 @@
+{
+  "name": "costtracker-ai",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Browser-only dashboard for manually tracking AI API spending.",
+  "license": "MIT",
+  "author": "Krishna Shahane",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/krishnashahane/CostTracker-AI.git"
+  },
+  "scripts": {
+    "serve": "python3 -m http.server 8080",
+    "lint": "eslint app.js tests eslint.config.js",
+    "test": "node --test \"tests/*.test.js\"",
+    "check": "npm run lint && npm test && npm audit --audit-level=moderate"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "eslint": "10.15.0",
+    "eslint-plugin-no-unsanitized": "4.1.5",
+    "globals": "17.14.0",
+    "jsdom": "31.0.1"
+  }
+}
